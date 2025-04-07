@@ -10,7 +10,7 @@ import zipfile
 import hashlib
 import json 
 
-# Настройка логгирования
+""" Настройка логгирования """
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -128,7 +128,8 @@ class EducationalProgram(Base):
     
     supplement = relationship('Supplement', back_populates='educational_programs')
 
-class Decision(Base): # Хранит распорядительные документы, связанные с сертификатами.
+class Decision(Base):
+    """ Хранит распорядительные документы, связанные с сертификатами. """
     __tablename__ = 'decisions'
     
     id = Column(Integer, primary_key=True) # Идентификатор документа
@@ -163,7 +164,7 @@ def safe_date(element, fmts=('%Y-%m-%d', '%d.%m.%Y', '%Y/%m/%d', '%Y-%m-%d %H:%M
     if element is None or element.text is None:
         return None
     text = element.text.strip()
-    # Удаляем временную зону если она есть
+    """ Удаляем временную зону если она есть """
     if '+' in text:
         text = text.split('+')[0].strip()
     for fmt in fmts:
@@ -179,7 +180,6 @@ def safe_bool(element):
     if element is None or element.text is None:
         return None
     text = element.text.strip()
-    # Явное преобразование для SQLite
     if text == '1':
         return True
     elif text == '0':
@@ -193,16 +193,16 @@ def download_and_extract_archive(url):
         response = requests.get(url, stream=True)
         response.raise_for_status()
         
-        # Создаем папку для кэша, если ее нет
+        """ Создание папку для кэша, если ее нет """
         os.makedirs(CONFIG['cache_dir'], exist_ok=True)
         
-        # Сохраняем архив
+        """ Сохранение архива """
         zip_path = os.path.join(CONFIG['cache_dir'], 'data.zip')
         with open(zip_path, 'wb') as f:
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
         
-        # Распаковываем архив
+        """ Распаковка архива """
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             zip_ref.extractall(CONFIG['cache_dir'])
             extracted_files = zip_ref.namelist()
@@ -263,22 +263,23 @@ def find_xml_file(directory):
     return None
 
 
-# Парсер XML
+
 def parse_xml_to_db(xml_file, session):
+    """ Парсер XML """
     try:
-        # Проверка размера файла
+        """ Проверка размера файла """
         file_size = os.path.getsize(xml_file) / (1024 * 1024)
         logger.info(f'Начало обработки файла {xml_file} (размер: {file_size:.2f} MB)')
         
-        # Потоковый парсинг для больших файлов
+        """ Потоковый парсинг для больших файлов """
         for event, elem in ET.iterparse(xml_file, events=('end',)):
             if elem.tag.endswith('Certificate'):
                 try:
-                    # Обработка организации
+                    """ Обработка организации """
                     org = process_organization(elem)
                     session.add(org)
                     
-                    # Обработка сертификата
+                    """ Обработка сертификата """
                     cert = process_certificate(elem, org)
                     session.add(cert)
 
@@ -297,21 +298,21 @@ def parse_xml_to_db(xml_file, session):
                         )
                         session.add(ip)
                         
-                    # Обработка приложений
+                    """ Обработка приложений """
                     for supp_elem in elem.findall('.//Supplement'):
                         supp = process_supplement(supp_elem, cert)
                         session.add(supp)
                         
-                        # Обработка программ
+                        """ Обработка программ """
                         for prog_elem in supp_elem.findall('.//EducationalProgram'):
                             prog = process_program(prog_elem, supp)
                             session.add(prog)
-                    # Обработка Decision
+                    """ Обработка Decision """
                     for decision_elem in elem.findall('.//Decisions/Decision'):
                         decision = process_decision(decision_elem, cert)
                         session.add(decision)
                     
-                    # Периодический коммит
+                    """ Периодический коммит """
                     if len(session.new) % 100 == 0:
                         session.commit()
                         logger.info(f'Обработано {len(session.new)} записей...')
@@ -320,7 +321,7 @@ def parse_xml_to_db(xml_file, session):
                     logger.error(f'Ошибка обработки сертификата: {str(e)}')
                     session.rollback()
                 
-                # Очистка памяти
+                """ Очистка памяти """
                 elem.clear()
         
         session.commit()
@@ -424,25 +425,26 @@ def process_decision(decision_elem, certificate):
     )
     
 def main():
-    # 1. Загрузка и распаковка архива
+    """ Загрузка и распаковка архива """
     try:
         extracted_files = download_and_extract_archive(CONFIG['data_url'])
     except Exception as e:
         logger.error(f"Не удалось загрузить данные: {str(e)}")
         return
-    # 2. Поиск XML файла в распакованных данных
+    
+    """ Поиск XML файла в распакованных данных """
     xml_file = find_xml_file(CONFIG['cache_dir'])
     if not xml_file:
         logger.error("XML файл не найден в распакованных данных")
         return
     
-    # 3. Проверка изменений
+    """ Проверка изменений """
     if not check_for_updates(xml_file):
         logger.info("Данные не изменились, обработка не требуется")
         return
     
     
-    # 4. Инициализация БД
+    """ Инициализация БД """
     engine = create_engine(f'sqlite:///{CONFIG["db_file"]}', echo=False)
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
