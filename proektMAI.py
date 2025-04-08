@@ -322,7 +322,7 @@ def process_organization(cert_elem):
         Phone = safe_text(org_elem.find('Phone')),
         Fax = safe_text(org_elem.find('Fax')),
         Email = safe_text(org_elem.find('Email')),
-        WebSite = safe_text(org_elem.find('Website')),
+        WebSite = safe_text(org_elem.find('WebSite')),
         PostAddress = safe_text(org_elem.find('PostAddress')),
         INN = safe_text(org_elem.find('INN')),
         KPP = safe_text(org_elem.find('KPP')),
