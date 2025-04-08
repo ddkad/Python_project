@@ -26,10 +26,11 @@ CONFIG = {
 }
 
 
-
-Base = declarative_base() # Создаю базовый класс для всех моделей. Все классы таблиц будут наследоваться от него.
+""" Создание базового класса для всех моделей. Все классы таблиц будут наследоваться от него. """
+Base = declarative_base()
 
 class Organization(Base):
+    """ Таблица организаций """
     __tablename__ = 'organizations' # Имя таблицы в БД 
     
     id = Column(Integer, primary_key=True)  
@@ -58,6 +59,7 @@ class Organization(Base):
     supplements = relationship('Supplement', back_populates='organization')
 
 class Certificate(Base):
+    """ Таблица сертификатов """
     __tablename__ = 'certificates'
     
     id = Column(Integer, primary_key=True) # Идентификатор свидетельства
@@ -79,12 +81,19 @@ class Certificate(Base):
     EduOrgINN = Column(String) # ИНН
     EduOrgKPP = Column(String) # КПП
     EduOrgOGRN = Column(String) # ОГРН
+    LastName = Column(String) # Фамилия индивидуального предпринимателя (при наличии)
+    FirstName = Column(String) # Имя индивидуального предпринимателя (при наличии)
+    MiddleName = Column(String) # Отчество индивидуального предпринимателя (при наличии)
+    Address = Column(String) # Юридический адрес индивидуального предпринимателя (при наличии)
+    EGRIP = Column(String) # ОГРН индивидуального предпринимателя (при наличии)
+    INN = Column(String) # ИНН индивидуального предпринимателя (при наличии)
     
     organization = relationship('Organization', back_populates='certificates')
     supplements = relationship('Supplement', back_populates='certificate')
     decisions = relationship('Decision', back_populates='certificate')
 
 class Supplement(Base):
+    """ Таблица приложений """
     __tablename__ = 'supplements'
     
     id = Column(Integer, primary_key=True)
@@ -109,6 +118,7 @@ class Supplement(Base):
     organization = relationship('Organization', back_populates='supplements')
 
 class EducationalProgram(Base):
+    """ Таблица образовательных программ """
     __tablename__ = 'educational_programs'
     
     id = Column(Integer, primary_key=True) # Идентификатор программы
@@ -141,21 +151,6 @@ class Decision(Base):
     DecisionDate = Column(Date) # Дата распорядительного документа
     
     certificate = relationship('Certificate', back_populates='decisions')
-
-class IndividualEntrepreneur(Base):
-    __tablename__ = 'individual_entrepreneurs'
-    
-    id = Column(Integer, primary_key=True)
-    certificate_id = Column(Integer, ForeignKey('certificates.id'))
-    
-    LastName = Column(String) # Фамилия индивидуального предпринимателя (при наличии)
-    FirstName = Column(String) # Имя индивидуального предпринимателя (при наличии)
-    MiddleName = Column(String) # Отчество индивидуального предпринимателя (при наличии)
-    Address = Column(String) # Юридический адрес индивидуального предпринимателя (при наличии)
-    EGRIP = Column(String) # ОГРН индивидуального предпринимателя (при наличии)
-    INN = Column(String) # ИНН индивидуального предпринимателя (при наличии)
-    
-    certificate = relationship('Certificate', backref='entrepreneur')
 
 def safe_text(element, default=None):
     return element.text if element is not None else default
@@ -282,21 +277,6 @@ def parse_xml_to_db(xml_file, session):
                     """ Обработка сертификата """
                     cert = process_certificate(elem, org)
                     session.add(cert)
-
-                    ip_data = {
-                        'LastName': safe_text(elem.find('IndividualEntrepreneurLastName')),
-                        'FirstName': safe_text(elem.find('IndividualEntrepreneurFirstName')),
-                        'MiddleName': safe_text(elem.find('IndividualEntrepreneurMiddleName')),
-                        'Address': safe_text(elem.find('IndividualEntrepreneurAddress')),
-                        'EGRIP': safe_text(elem.find('IndividualEntrepreneurEGRIP')),
-                        'INN': safe_text(elem.find('IndividualEntrepreneurINN'))
-                    }
-                    if any(value for value in ip_data.values() if value is not None):
-                        ip = IndividualEntrepreneur(
-                            certificate=cert,
-                            **ip_data
-                        )
-                        session.add(ip)
                         
                     """ Обработка приложений """
                     for supp_elem in elem.findall('.//Supplement'):
@@ -315,7 +295,6 @@ def parse_xml_to_db(xml_file, session):
                     """ Периодический коммит """
                     if len(session.new) % 100 == 0:
                         session.commit()
-                        logger.info(f'Обработано {len(session.new)} записей...')
                         
                 except Exception as e:
                     logger.error(f'Ошибка обработки сертификата: {str(e)}')
@@ -333,6 +312,7 @@ def parse_xml_to_db(xml_file, session):
         return False
 
 def process_organization(cert_elem):
+    """ Извлекает данные об образовательной организации из XML и создаёт объект Organization. """
     org_elem = cert_elem.find('ActualEducationOrganization')
     if org_elem is None:
         return None
@@ -361,27 +341,53 @@ def process_organization(cert_elem):
 
     
 def process_certificate(cert_elem, organization):
+    """Извлекает данные о свидетельстве (аккредитации) из XML и связывает его с организацией."""
+    
+    """ Получаем полное ФИО из IndividualEntrepreneurLastName """
+    ip_full_name = safe_text(cert_elem.find('IndividualEntrepreneurLastName'))
+    ip_first_name = safe_text(cert_elem.find('IndividualEntrepreneurFirstName'))
+    ip_middle_name = safe_text(cert_elem.find('IndividualEntrepreneurMiddleName'))
+
+    """ Если ФИО полностью в LastName, то разбиваем на части"""
+    if ip_full_name and not (ip_first_name or ip_middle_name):
+        cleaned_name = ip_full_name.replace('индивидуальный предприниматель', '').replace('ИП', '').replace('Индивидуальный предприниматель', '').strip()
+        
+        name_parts = cleaned_name.split()
+
+        ip_last_name = name_parts[0] if len(name_parts) >= 1 else None
+        ip_first_name = name_parts[1] if len(name_parts) >= 2 else None
+        ip_middle_name = name_parts[2] if len(name_parts) >= 3 else None
+    else:
+        ip_last_name = ip_full_name
+
     return Certificate(
-    organization=organization,
-    IsFederal = safe_bool(cert_elem.find('IsFederal')),
-    StatusName = safe_text(cert_elem.find('StatusName')),
-    TypeName = safe_text(cert_elem.find('TypeName')),
-    RegionName = safe_text(cert_elem.find('RegionName')),
-    RegionCode = safe_text(cert_elem.find('RegionCode')),
-    FederalDistrictName = safe_text(cert_elem.find('FederalDistrictName')),
-    FederalDistrictShortName = safe_text(cert_elem.find('FederalDistrictShortName')),
-    RegNumber = safe_text(cert_elem.find('RegNumber')),
-    SerialNumber = safe_text(cert_elem.find('SerialNumber')),
-    FormNumber = safe_text(cert_elem.find('FormNumber')),
-    IssueDate = safe_date(cert_elem.find('IssueDate')),
-    EndDate = safe_date(cert_elem.find('EndDate')),
-    ControlOrgan = safe_text(cert_elem.find('ControlOrgan')),
-    EduOrgINN = safe_text(cert_elem.find('EduOrgINN')),
-    EduOrgKPP = safe_text(cert_elem.find('EduOrgKPP')),
-    EduOrgOGRN = safe_text(cert_elem.find('EduOrgOGRN'))
+        organization=organization,
+        IsFederal=safe_bool(cert_elem.find('IsFederal')),
+        StatusName=safe_text(cert_elem.find('StatusName')),
+        TypeName=safe_text(cert_elem.find('TypeName')),
+        RegionName=safe_text(cert_elem.find('RegionName')),
+        RegionCode=safe_text(cert_elem.find('RegionCode')),
+        FederalDistrictName=safe_text(cert_elem.find('FederalDistrictName')),
+        FederalDistrictShortName=safe_text(cert_elem.find('FederalDistrictShortName')),
+        RegNumber=safe_text(cert_elem.find('RegNumber')),
+        SerialNumber=safe_text(cert_elem.find('SerialNumber')),
+        FormNumber=safe_text(cert_elem.find('FormNumber')),
+        IssueDate=safe_date(cert_elem.find('IssueDate')),
+        EndDate=safe_date(cert_elem.find('EndDate')),
+        ControlOrgan=safe_text(cert_elem.find('ControlOrgan')),
+        EduOrgINN=safe_text(cert_elem.find('EduOrgINN')),
+        EduOrgKPP=safe_text(cert_elem.find('EduOrgKPP')),
+        EduOrgOGRN=safe_text(cert_elem.find('EduOrgOGRN')),
+        LastName=ip_last_name,
+        FirstName=ip_first_name,
+        MiddleName=ip_middle_name,
+        Address=safe_text(cert_elem.find('IndividualEntrepreneurAddress')),
+        EGRIP=safe_text(cert_elem.find('IndividualEntrepreneurEGRIP')),
+        INN=safe_text(cert_elem.find('IndividualEntrepreneurINN'))
     )
 
 def process_supplement(supp_elem, cert):
+    """ Обрабатывает приложения к свидетельству из <Supplement>. """
     return Supplement(
     certificate = cert,
     organization = cert.organization,
@@ -400,6 +406,7 @@ def process_supplement(supp_elem, cert):
     )
     
 def process_program(prog_elem, supplement):
+    """ Извлекает данные об образовательных программах и связывает с приложением. """
     return EducationalProgram(
     supplement = supplement,
     TypeName = safe_text(prog_elem.find('TypeName')),
@@ -416,6 +423,7 @@ def process_program(prog_elem, supplement):
     )
 
 def process_decision(decision_elem, certificate):
+    """ Обрабатывает решения (приказы) по свидетельству из <Decision>. """
     return Decision(
         certificate=certificate,
         DecisionTypeName=safe_text(decision_elem.find('DecisionTypeName')),
@@ -423,7 +431,7 @@ def process_decision(decision_elem, certificate):
         OrderDocumentKind=safe_text(decision_elem.find('OrderDocumentKind')),
         DecisionDate=safe_date(decision_elem.find('DecisionDate'))
     )
-    
+
 def main():
     """ Загрузка и распаковка архива """
     try:
@@ -460,7 +468,6 @@ def main():
                 'organizations': session.query(Organization).count(),
                 'certificates': session.query(Certificate).count(),
                 'decisions': session.query(Decision).count(),
-                'entrepreneurs': session.query(IndividualEntrepreneur).count(),
                 'duration_seconds': duration.total_seconds()
             }
             logger.info(f'''
@@ -469,9 +476,14 @@ def main():
                 - Организаций: {stats['organizations']}
                 - Сертификатов: {stats['certificates']}
                 - Решений: {stats['decisions']}
-                - Предпринимателей: {stats['entrepreneurs']}
                 - Время выполнения: {stats['duration_seconds']:.2f} сек
             ''')
+            """ Дополнительная проверка данных ИП """
+            ip_count = session.query(Certificate).filter(
+                Certificate.LastName.isnot(None)
+            ).count()
+            logger.info(f"Сертификатов с данными ИП: {ip_count}")
+            
         else:
             logger.error('Загрузка завершена с ошибками!')
             
