@@ -86,9 +86,9 @@ class EducationalProgram(Base):
     IsSuspended = Column(Boolean, nullable=True) # Приостановка ОП
     okso_code = Column(String)
     
-    organization = relationship('Organization', back_populates='programs')
-    education_level = relationship('EducationLevel')
-    education_form = relationship('EducationForm')
+    organization = relationship("Organization", back_populates="programs")
+    education_level = relationship("EducationLevel")
+    education_form = relationship("EducationForm")
     
 class OrganizationType(Base):
     """Типы образовательных организаций (высшее, среднее и т.д.)"""
@@ -225,7 +225,7 @@ def find_xml_file(directory):
 def parse_xml_to_db(xml_file, session):
     """ Парсер XML """
     try:
-        """ Кэшируем типы организаций """
+        # Кэшируем типы организаций
         org_types_cache = {ot.code: ot for ot in session.query(OrganizationType).all()}
         
         file_size = os.path.getsize(xml_file) / (1024 * 1024)
@@ -234,28 +234,31 @@ def parse_xml_to_db(xml_file, session):
         for event, elem in ET.iterparse(xml_file, events=('end',)):
             if elem.tag.endswith('Certificate'):
                 try:
-                    """ Cобираем программы для передачи в process_organization """
+                    # Собираем программы для передачи в process_organization
                     programs = []
                     for supp_elem in elem.findall('.//Supplement'):
                         for prog_elem in supp_elem.findall('.//EducationalProgram'):
                             programs.append(prog_elem)
-                
+                    
+                    # Обработка организации
                     org = process_organization(elem, session, org_types_cache, programs)
                     if org is None:
                         continue
                     
+                    # Проверяем наличие типа организации
                     if org.org_type is None:
-                        logger.warning(f'Организация {org.EduOrgFullName} не имеет типа. Пропуск.')
+                        logger.warning(f"Организация {org.EduOrgFullName} не имеет типа. Пропуск.")
                         continue
                     
+                    # Фильтрация: включаем вузы (org_type.code == 'higher') или филиалы (IsBranch == True)
                     if org.org_type.code != 'higher' and not org.IsBranch:
-                        logger.debug(f'Пропуск организации {org.EduOrgFullName}, TypeName: {org.TypeName}, IsBranch: {org.IsBranch}, org_type.code: {org.org_type.code}')
+                        logger.debug(f"Пропуск организации {org.EduOrgFullName}, TypeName: {org.TypeName}, IsBranch: {org.IsBranch}, org_type.code: {org.org_type.code}")
                         continue
                     
                     session.add(org)
                     session.flush()
                     
-                    """ Обработка филиалов """
+                    # Обработка филиалов
                     if org.IsBranch:
                         parent = session.query(Organization).filter(
                             (Organization.id == org.HeadEduOrgId) |
@@ -282,14 +285,14 @@ def parse_xml_to_db(xml_file, session):
         
         session.commit()
         
-        """ Логируем статистику """
+        # Логируем статистику
         main_universities = session.query(Organization).filter(
             Organization.type_id == session.query(OrganizationType).filter_by(code='higher').first().id,
             Organization.IsBranch == False
         ).count()
         branches = session.query(Organization).filter(Organization.IsBranch == True).count()
-        logger.info(f'Количество основных вузов: {main_universities}')
-        logger.info(f'Количество филиалов: {branches}')
+        logger.info(f"Количество основных вузов: {main_universities}")
+        logger.info(f"Количество филиалов: {branches}")
         
         return True
         
@@ -307,22 +310,26 @@ def process_organization(cert_elem, session, org_types_cache, programs=None):
     """ Извлекает данные об образовательной организации из XML и создаёт объект Organization. """
     org_elem = cert_elem.find('ActualEducationOrganization')
     if org_elem is None:
-        logger.warning('Не найден элемент ActualEducationOrganization')
+        logger.warning("Не найден элемент ActualEducationOrganization")
         return None
     
+    # Получаем тип организации и филиальность
     type_elem = org_elem.find('TypeName')
     type_name = safe_text(type_elem, '').lower()
     is_branch = safe_bool(org_elem.find('IsBranch'))
     
-    logger.debug(f'Обработка организации: {safe_text(org_elem.find('FullName'))}, TypeName: {type_name}, IsBranch: {is_branch}')
-
+    # Логируем для диагностики
+    logger.debug(f"Обработка организации: {safe_text(org_elem.find('FullName'))}, TypeName: {type_name}, IsBranch: {is_branch}")
+    
+    # Определяем тип организации
     org_type_code = None
     
-    """ Явно исключаем школы """
+    # Явно исключаем школы
     if any(x in type_name for x in ['школа', 'лицей', 'гимназия', 'среднее общеобразовательное', 'средняя общеобразовательная']):
         org_type_code = 'secondary'
-        logger.debug(f'Организация классифицирована как школа: {type_name}')
+        logger.debug(f"Организация классифицирована как школа: {type_name}")
     
+    # Проверяем вузы по ключевым словам
     elif any(x in type_name for x in [
         'вуз', 'университет', 'институт', 'высшее учебное заведение', 'академия',
         'федеральное государственное', 'государственное образовательное',
@@ -332,24 +339,27 @@ def process_organization(cert_elem, session, org_types_cache, programs=None):
     ]):
         org_type_code = 'higher'
     
+    # Проверяем образовательные программы (если переданы)
     elif programs:
         for prog_elem in programs:
             edu_level = safe_text(prog_elem.find('EduLevelName'), '').lower()
             if any(x in edu_level for x in ['бакалавриат', 'магистратура', 'специалитет', 'аспирантура']):
                 org_type_code = 'higher'
-                logger.debug(f'Организация классифицирована как вуз на основе программы: {edu_level}')
+                logger.debug(f"Организация классифицирована как вуз на основе программы: {edu_level}")
                 break
     
+    # По умолчанию - среднее профессиональное или общее
     if not org_type_code:
         org_type_code = 'secondary_pro' if 'колледж' in type_name or 'техникум' in type_name else 'secondary'
         logger.debug(f"Неизвестный тип организации: {type_name}, установлен по умолчанию: {org_type_code}")
     
-    """ Получаем объект OrganizationType из кэша """
+    # Получаем объект OrganizationType из кэша
     org_type_obj = org_types_cache.get(org_type_code)
     if not org_type_obj:
         logger.warning(f"Тип организации '{org_type_code}' не найден в базе")
         return None
-
+    
+    # Создаем объект организации
     org = Organization(
         EduOrgShortName=safe_text(org_elem.find('ShortName')),
         EduOrgFullName=safe_text(org_elem.find('FullName')),
@@ -374,14 +384,15 @@ def process_organization(cert_elem, session, org_types_cache, programs=None):
         type_id=org_type_obj.id
     )
     
-    """ Устанавливаем объект OrganizationType для связи """
+    # Устанавливаем объект OrganizationType для связи
     org.org_type = org_type_obj
     
     return org
     
-    
 def process_program(prog_elem, session):
     """ Извлекает данные об образовательных программах """
+    # Определяем уровень образования
+    # Безопасное получение данных с обработкой None
     level_name = safe_text(prog_elem.find('EduLevelName'), '').lower()
     form_name = safe_text(prog_elem.find('EducationForm'), '').lower()
     level_code = None
@@ -392,7 +403,8 @@ def process_program(prog_elem, session):
     elif 'специалист' in level_name or 'аспирант' in level_name:
         level_code = 'specialist'
     
-    form_name = safe_text(prog_elem.find('EducationForm'), '').lower()
+    # Определяем форму обучения
+    form_name = safe_text(prog_elem.find('EducationForm'), '').lower()  # Предполагаем, что есть такой тег
     form_code = None
     
     if 'очная' in form_name:
@@ -403,7 +415,8 @@ def process_program(prog_elem, session):
         form_code = 'mixed'
     else:
         form_code = 'full_time'  # Значение по умолчанию
-
+        
+    # Получаем ID уровней и форм из базы
     level_id = None
     if level_code:
         level = session.query(EducationLevel).filter_by(code=level_code).first()
@@ -427,7 +440,7 @@ def process_program(prog_elem, session):
         IsAccredited=safe_bool(prog_elem.find('IsAccredited')),
         IsCanceled=safe_bool(prog_elem.find('IsCanceled')),
         IsSuspended=safe_bool(prog_elem.find('IsSuspended')),
-        okso_code=safe_text(prog_elem.find('ProgrammCode')),
+        okso_code=safe_text(prog_elem.find('ProgrammCode')),  # Код ОКСО
         level_id=level_id,
         form_id=form_id
     )
@@ -437,35 +450,38 @@ def process_program(prog_elem, session):
 
 def initialize_database(session):
     """Заполняет справочные таблицы начальными данными"""
-    """ Типы организаций """
+    # Типы организаций
     org_types = [
-        {'name': 'высшее образование', 'code': 'higher'},
-        {'name': 'среднее профессиональное', 'code': 'secondary_pro'},
-        {'name': 'среднее общее', 'code': 'secondary'}
+        {"name": "высшее образование", "code": "higher"},
+        {"name": "среднее профессиональное", "code": "secondary_pro"},
+        {"name": "среднее общее", "code": "secondary"}
     ]
     
-    """ Уровни образования """
+    # Уровни образования
     edu_levels = [
-        {'name': 'Бакалавриат', 'code': 'bachelor'},
-        {'name': 'Магистратура', 'code': 'master"'},
-        {'name': 'Специалитет', 'code': 'specialist'},
-        {'name': 'Аспирантура', 'code': 'postgraduate'}
+        {"name": "Бакалавриат", "code": "bachelor"},
+        {"name": "Магистратура", "code": "master"},
+        {"name": "Специалитет", "code": "specialist"},
+        {"name": "Аспирантура", "code": "postgraduate"}
     ]
     
-    """ Формы обучения """
+    # Формы обучения
     edu_forms = [
-        {'name': 'Очная', 'code': 'full_time'},
-        {'name': 'Заочная', 'code': 'part_time'},
-        {'name': 'Очно-заочная', 'code': 'mixed'},
-        {'name': 'Дистанционная', 'code': 'remote'}
+        {"name": "Очная", "code": "full_time"},
+        {"name": "Заочная", "code": "part_time"},
+        {"name": "Очно-заочная", "code": "mixed"},
+        {"name": "Дистанционная", "code": "remote"}
     ]
     
+    # Добавляем типы организаций
     for item in org_types:
         session.merge(OrganizationType(**item))
     
+    # Добавляем уровни образования
     for item in edu_levels:
         session.merge(EducationLevel(**item))
     
+    # Добавляем формы обучения
     for item in edu_forms:
         session.merge(EducationForm(**item))
     
@@ -476,28 +492,28 @@ def main():
     try:
         extracted_files = download_and_extract_archive(CONFIG['data_url'])
     except Exception as e:
-        logger.error(f'Не удалось загрузить данные: {str(e)}')
+        logger.error(f"Не удалось загрузить данные: {str(e)}")
         return
     
     """ Поиск XML файла в распакованных данных """
     xml_file = find_xml_file(CONFIG['cache_dir'])
     if not xml_file:
-        logger.error('XML файл не найден в распакованных данных')
+        logger.error("XML файл не найден в распакованных данных")
         return
     
     """ Проверка изменений """
     if not check_for_updates(xml_file):
-        logger.info('Данные не изменились, обработка не требуется')
+        logger.info("Данные не изменились, обработка не требуется")
         return
     
     """ Инициализация БД """
-    engine = create_engine(f'sqlite:///{CONFIG['db_file']}', echo=False)
+    engine = create_engine(f'sqlite:///{CONFIG["db_file"]}', echo=False)
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     session = Session()
     
     try:
-        """ Инициализация справочных данных """
+        # Инициализация справочных данных
         initialize_database(session)
         
         logger.info('Начало загрузки данных...')
